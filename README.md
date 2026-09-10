@@ -5,9 +5,10 @@ Dashboard, deployment configs, and project memory for the [Open Live](https://gi
 ## What It Does
 
 - **Dashboard** — web UI that monitors Docker containers, shows live status, real version numbers, and lets you start/stop/restart services with a single click
-- **Deployment configs** — ready-to-run `docker-compose.yml` for two modes:
+- **Deployment configs** — ready-to-run `docker-compose.yml` for three modes:
   - **Local** — everything runs on your machine (Strom, Open-Live, Open-Live-Studio, CouchDB)
   - **Hybrid** — Strom runs locally, Open-Live and Studio run on OSC (cloud)
+  - **SRT Gateway** — Linux + Blackmagic DeckLink only: captures SDI and sends MPEG-TS/EFP over SRT to a Haivision relay; driven from the dashboard's SRT GATEWAY section
 - **Memory agent** — `MEMORY.md` tracks architecture decisions, reference sources, and progress
 
 ## Architecture
@@ -17,6 +18,7 @@ Dashboard, deployment configs, and project memory for the [Open Live](https://gi
 [Browser] → Open Studio  (:3000) → Studio UI
 [Browser] → Backend       (:8000) → Open-Live API
 [Browser] → Strom         (:8080) → Strom Web UI
+[Browser] → SRT Gateway   (:8081) → SRT relay (MPEG-TS/EFP)
 ```
 
 | Container | Port | Local mode | Hybrid mode |
@@ -25,6 +27,7 @@ Dashboard, deployment configs, and project memory for the [Open Live](https://gi
 | Strom | 8080 | Yes | Yes |
 | Open-Live backend | 8000 | Yes | — (OSC) |
 | Open-Live-Studio | 3000 | Yes | — (OSC) |
+| SRT Gateway | 8081 | Linux + DeckLink only | — |
 
 ## Requirements
 
@@ -41,6 +44,16 @@ Dashboard, deployment configs, and project memory for the [Open Live](https://gi
 - Ubuntu 22.04+ or equivalent
 - NVIDIA GPU highly recommended for Strom (hardware encode/decode/compositing)
 - For GPU support: [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+
+#### SRT Gateway (optional)
+
+The SRT gateway requires Blackmagic DeckLink hardware and has extra host requirements:
+
+- Linux only — no macOS/Windows support
+- A Blackmagic DeckLink card configured via **Blackmagic Desktop Video** (card profile + connector mapping)
+- DeckLink libraries and device nodes bind-mounted into the container (`/usr/lib/libDeckLinkAPI.so`, `/usr/lib/libDeckLinkPreviewAPI.so`, `/usr/lib/blackmagic`, `/dev/blackmagic`)
+- The container runs `privileged` with an NVIDIA GPU reservation
+- DeckLink cards are exclusively owned by this container — do not run other containers that use them
 
 ### macOS
 - Docker Desktop with at least 4GB RAM allocated
@@ -75,6 +88,7 @@ Your folder structure should be:
     ├── dashboard/
     ├── open_live_local/
     ├── open_live_hybrid/
+    ├── open_live_srt/
     └── MEMORY.md
 ```
 
@@ -102,6 +116,15 @@ STROM_API_KEY=your-generated-api-key docker compose up -d
 ```
 
 Then configure Open-Live and Studio on [OSC](https://www.osaas.io) pointing to your Strom's public URL.
+
+#### Option C — SRT Gateway (Linux + DeckLink only)
+
+```bash
+cd open_live_srt
+docker compose up -d
+```
+
+The gateway runs on port **8081** and can run independently of local/hybrid mode. Configure channels and start/stop streams from the dashboard's **SRT GATEWAY** section. It dials out (as an SRT caller) to a Haivision relay: publish ports `23001–23005`, read ports `23101+`.
 
 ### 3. Start the Dashboard
 
@@ -152,6 +175,10 @@ open_live_local/
 open_live_hybrid/
 ├── docker-compose.yml      # 2-service hybrid stack
 └── .env.example            # Configuration template
+
+open_live_srt/
+├── docker-compose.yml      # SRT gateway Strom (DeckLink capture → SRT relay)
+└── ...                     # srt-config.json / *.conf are local, gitignored
 
 MEMORY.md                   # Project memory agent
 ```
