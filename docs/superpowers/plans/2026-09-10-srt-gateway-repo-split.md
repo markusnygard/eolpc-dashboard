@@ -723,7 +723,7 @@ Expected: FAIL — `Cannot find module '../server.mjs'`.
 Create `/home/nygard/open-live-srt-gateway/control/server.mjs`:
 
 ```js
-import { createServer, get as httpGet } from "node:http";
+import { createServer } from "node:http";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -826,7 +826,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 }
 ```
 
-Note: `httpGet` is imported but unused; keep imports minimal by removing it — the final import line should be `import { createServer } from "node:http";`.
+Note: imports are `createServer` from `node:http` only — no unused imports.
 
 - [ ] **Step 4: Run test to verify it passes**
 
