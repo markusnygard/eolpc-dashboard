@@ -88,7 +88,6 @@ Your folder structure should be:
     ├── dashboard/
     ├── open_live_local/
     ├── open_live_hybrid/
-    ├── open_live_srt/
     └── MEMORY.md
 ```
 
@@ -119,12 +118,21 @@ Then configure Open-Live and Studio on [OSC](https://www.osaas.io) pointing to y
 
 #### Option C — SRT Gateway (Linux + DeckLink only)
 
+The gateway lives in its own repo. Clone it as a sibling of this workspace:
+
 ```bash
-cd open_live_srt
+cd ..
+git clone https://github.com/markusnygard/open-live-srt-gateway.git
+cd open-live-srt-gateway
+cp .env.example .env
+mkdir -p data
 docker compose up -d
 ```
 
-The gateway runs on port **8081** and can run independently of local/hybrid mode. Configure channels and start/stop streams from the dashboard's **SRT GATEWAY** section. It dials out (as an SRT caller) to a Haivision relay: publish ports `23001–23005`, read ports `23101+`.
+Then start it from the dashboard's **SRT GATEWAY** card (Start button), or use the commands
+above directly. The gateway's own UI and settings live at **http://localhost:8090**; the
+dashboard only starts/stops it and links to it. See
+`open-live-srt-gateway/README.md` for the DeckLink and custom-image requirements.
 
 ### 3. Start the Dashboard
 
@@ -176,9 +184,8 @@ open_live_hybrid/
 ├── docker-compose.yml      # 2-service hybrid stack
 └── .env.example            # Configuration template
 
-open_live_srt/
-├── docker-compose.yml      # SRT gateway Strom (DeckLink capture → SRT relay)
-└── ...                     # srt-config.json / *.conf are local, gitignored
+# SRT Gateway now lives in its own repo:
+# https://github.com/markusnygard/open-live-srt-gateway
 
 MEMORY.md                   # Project memory agent
 ```
