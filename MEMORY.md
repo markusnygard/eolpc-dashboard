@@ -1481,9 +1481,12 @@ The dashboard's SRT GATEWAY section drives a dedicated **Strom** instance that c
 DeckLink SDI and sends **MPEG-TS or EFP** over SRT (as callers) to a Haivision relay.
 
 ### Topology
-- **SRT Gateway Strom** — `open-live-srt-gateway` (docker compose in `open_live_srt/`),
-  port **8081**, `privileged` with DeckLink + GPU mounts. Runs independently of
-  local/hybrid mode. The DeckLink cards are exclusively owned by this container.
+- **SRT Gateway Strom** — now lives in its own repo
+  `https://github.com/markusnygard/open-live-srt-gateway` (docker compose in that
+  repo's `open-live-srt-gateway/`), with its own control UI on host port **8090**.
+  Capture container on port **8081**, `privileged` with DeckLink + GPU mounts. Runs
+  independently of local/hybrid mode. The DeckLink cards are exclusively owned by this
+  container. The workspace dashboard only starts/stops it and links to the control UI.
 - **Hybrid Strom + CouchDB** (`open_live_hybrid/`, port 8080/5984) — serves the
   **OSC Open Live** backend via the VPS gateway (`93.115.23.149:8080/5984 → 100.64.0.1`).
   VPS gateway watchdog (`scripts/openlive-gateway-check.sh`, systemd timer on VPS)
@@ -1516,7 +1519,7 @@ DeckLink SDI and sends **MPEG-TS or EFP** over SRT (as callers) to a Haivision r
 - Settings (cog): global Codec/Bitrate/Video Mode; per-port Container (mpegts/efp),
   Role (off/sender/receiver), SRT Address. Device number is automatic.
 - Start = (re)create + start all flows; Stop = delete all; config save restarts streams.
-- SRT addresses live only in gitignored `open_live_srt/srt-config.json`.
+- SRT addresses live only in the gateway repo's gitignored `open-live-srt-gateway/data/srt-config.json`.
 
 ### Verified
 - EFP end-to-end with a local `efpsrt_input` receiver: video H.264→NV12 1920×1080,
