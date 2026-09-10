@@ -1,11 +1,11 @@
 import { createServer, get as httpGet } from "node:http";
 import { execSync } from "node:child_process";
 import { join, dirname } from "node:path";
-import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
+const SRT_GATEWAY_DIR = process.env.SRT_GATEWAY_DIR || join(ROOT, "..", "open-live-srt-gateway");
 const PORT = parseInt(process.env.PORT || "3100");
 
 const CONTAINERS = {
@@ -19,6 +19,10 @@ const CONTAINERS = {
   hybrid: {
     couchdb:    "open-live-hybrid-db",
     strom:      "open-live-hybrid-strom",
+  },
+  srt: {
+    gateway: "open-live-srt-gateway",
+    control: "open-live-srt-control",
   },
 };
 
@@ -78,186 +82,6 @@ function httpGetJson(port, path) {
   });
 }
 
-// ── SRT Gateway (drives Strom EFP-SRT flows; SRT addresses stay local/gitignored) ──
-const SRT_DIR = join(ROOT, "open_live_srt");
-const SRT_CONFIG_FILE = join(SRT_DIR, "srt-config.json");
-const SRT_FLOW_PREFIX = "srt-gw-";
-const SRT_STROM_URL = process.env.SRT_STROM_URL || "http://localhost:8081";
-const SRT_STROM_KEY = process.env.SRT_STROM_KEY || "dev-key-local";
-const SRT_CODECS = ["h264", "h265"];
-const SRT_BITRATES = [4, 6, 12, 24];
-
-function defaultSrtConfig() {
-  return {
-    stream: { codec: "h264", bitrate: 6, video_mode: "auto", container: "mpegts" },
-    ports: Array.from({ length: 12 }, (_, i) => ({ id: "SDI" + (i + 1), role: "off", address: "" })),
-  };
-}
-
-function loadSrtConfig() {
-  let cfg = null;
-  try { cfg = JSON.parse(readFileSync(SRT_CONFIG_FILE, "utf8")); } catch {}
-  if (!cfg || !Array.isArray(cfg.ports)) { cfg = defaultSrtConfig(); saveSrtConfig(cfg); return cfg; }
-  let legacyContainer = cfg.stream && cfg.stream.container;
-  if (!["mpegts", "efp"].includes(legacyContainer)) {
-    const counts = {};
-    for (const p of cfg.ports || []) {
-      if (p.role === "off") continue;
-      const c = p.container;
-      if (["mpegts", "efp"].includes(c)) counts[c] = (counts[c] || 0) + 1;
-    }
-    legacyContainer = counts.efp > counts.mpegts ? "efp" : "mpegts";
-  }
-  cfg.stream = {
-    codec: SRT_CODECS.includes(cfg.stream && cfg.stream.codec) ? cfg.stream.codec : "h264",
-    bitrate: SRT_BITRATES.includes(Number(cfg.stream && cfg.stream.bitrate)) ? Number(cfg.stream.bitrate) : 6,
-    video_mode: (cfg.stream && cfg.stream.video_mode) || "auto",
-    container: legacyContainer,
-  };
-  cfg.ports = cfg.ports.map((p, i) => ({
-    id: (p.id || "SDI" + (i + 1)).replace(/^SDI (\d+)$/, "SDI$1"),
-    role: ["off", "sender", "receiver"].includes(p.role) ? p.role : "off",
-    address: p.address || "",
-  }));
-  return cfg;
-}
-
-function saveSrtConfig(cfg) {
-  const normalized = {
-    stream: {
-      codec: SRT_CODECS.includes(cfg.stream && cfg.stream.codec) ? cfg.stream.codec : "h264",
-      bitrate: SRT_BITRATES.includes(Number(cfg.stream && cfg.stream.bitrate)) ? Number(cfg.stream.bitrate) : 6,
-      video_mode: (cfg.stream && cfg.stream.video_mode) || "auto",
-      container: ["mpegts", "efp"].includes(cfg.stream && cfg.stream.container) ? cfg.stream.container : "mpegts",
-    },
-    ports: (cfg.ports || []).map((p, i) => ({
-      id: (p.id || "SDI" + (i + 1)).replace(/^SDI (\d+)$/, "SDI$1"),
-      role: ["off", "sender", "receiver"].includes(p.role) ? p.role : "off",
-      address: p.address || "",
-    })),
-  };
-  writeFileSync(SRT_CONFIG_FILE, JSON.stringify(normalized, null, 2));
-}
-
-function ensureCaller(url) {
-  if (!url) return url;
-  if (/mode=[a-z]+/.test(url)) return url.replace(/mode=[a-z]+/, "mode=caller");
-  return url + (url.includes("?") ? "&" : "?") + "mode=caller";
-}
-
-async function stromReq(method, path, body) {
-  try {
-    const opts = { method, headers: { "Authorization": "Bearer " + SRT_STROM_KEY } };
-    if (body !== undefined) {
-      opts.headers["Content-Type"] = "application/json";
-      opts.body = JSON.stringify(body);
-    }
-    const res = await fetch(SRT_STROM_URL + path, opts);
-    const text = await res.text();
-    let data = null;
-    try { data = JSON.parse(text); } catch {}
-    return { ok: res.ok, status: res.status, data };
-  } catch (e) {
-    return { ok: false, status: 0, data: null, error: e.message };
-  }
-}
-
-async function listSrtFlows() {
-  const r = await stromReq("GET", "/api/flows");
-  if (!r.ok) return [];
-  return (r.data && r.data.flows || []).filter((f) => (f.name || "").startsWith(SRT_FLOW_PREFIX));
-}
-
-async function deleteSrtFlows() {
-  const flows = await listSrtFlows();
-  for (const f of flows) {
-    await stromReq("POST", "/api/flows/" + f.id + "/stop");
-    await stromReq("DELETE", "/api/flows/" + f.id);
-  }
-  return flows.length;
-}
-
-function buildSrtFlow(port, index, stream) {
-  const addr = ensureCaller(port.address);
-  const blocks = [];
-  const links = [];
-  if (port.role === "sender") {
-    const outBlock = (stream.container === "efp") ? "builtin.efpsrt_output" : "builtin.mpegtssrt_output";
-    blocks.push(
-      { id: "dl", block_definition_id: "builtin.decklink_input", name: port.id + " In",
-        properties: { device_number: index, stream_mode: "audio_video", mode: stream.video_mode || "auto" },
-        position: { x: 0, y: 0 } },
-      { id: "enc", block_definition_id: "builtin.videoenc", name: port.id + " Enc",
-        properties: { codec: stream.codec, bitrate: stream.bitrate * 1000, tune: "zerolatency", keyframe_interval: 50 },
-        position: { x: 160, y: 0 } },
-      { id: "srt", block_definition_id: outBlock, name: port.id + " SRT",
-        properties: { srt_uri: addr, num_video_tracks: 1, num_audio_tracks: 1, latency: 120, wait_for_connection: false },
-        position: { x: 320, y: 0 } },
-    );
-    links.push(
-      { from: "dl:video_out", to: "enc:video_in" },
-      { from: "enc:encoded_out", to: "srt:video_in" },
-      { from: "dl:audio_out", to: "srt:audio_in_0" },
-    );
-  } else if (port.role === "receiver") {
-    const inBlock = (stream.container === "efp") ? "builtin.efpsrt_input" : "builtin.mpegtssrt_input";
-    blocks.push(
-      { id: "inp", block_definition_id: inBlock, name: port.id + " In",
-        properties: { srt_uri: addr, decode: true, num_video_tracks: 1, latency: 120 }, position: { x: 0, y: 0 } },
-      { id: "dlo", block_definition_id: "builtin.decklink_output", name: port.id + " Out",
-        properties: { device_number: index, stream_mode: "audio_video" }, position: { x: 200, y: 0 } },
-    );
-    links.push(
-      { from: "inp:video_out", to: "dlo:video_in" },
-      { from: "inp:audio_out_0", to: "dlo:audio_in" },
-    );
-  } else {
-    return null;
-  }
-  return { id: "00000000-0000-0000-0000-000000000000", name: SRT_FLOW_PREFIX + port.id, blocks, links, properties: {} };
-}
-
-async function srtApply() {
-  const cfg = loadSrtConfig();
-  const removed = await deleteSrtFlows();
-  let created = 0, failed = 0;
-  for (let i = 0; i < cfg.ports.length; i++) {
-    const p = cfg.ports[i];
-    if (p.role === "off" || !p.address) continue;
-    const flow = buildSrtFlow(p, i, cfg.stream);
-    if (!flow) continue;
-    const r = await stromReq("POST", "/api/flows", flow);
-    if (r.ok && r.data && r.data.flow && r.data.flow.id) {
-      await stromReq("POST", "/api/flows/" + r.data.flow.id + "/start");
-      created++;
-    } else {
-      failed++;
-    }
-  }
-  return { removed, created, failed };
-}
-
-async function srtStatus() {
-  const flows = await listSrtFlows();
-  const map = {};
-  for (const f of flows) {
-    map[f.name.replace(SRT_FLOW_PREFIX, "")] = f;
-  }
-  const cfg = loadSrtConfig();
-  const channels = cfg.ports.map((p) => {
-    const f = map[p.id];
-    return {
-      sdi: p.id,
-      role: p.role,
-      address: p.address || "",
-      container: cfg.stream.container,
-      running: !!(f && f.running),
-      color: p.role === "off" ? "off" : (f && f.running) ? "green" : "red",
-    };
-  });
-  return { flows: flows.length, stream: cfg.stream, channels };
-}
-
 async function probeVersion(svc, ctr) {
   if (!ctr || ctr.status !== "running") return ctr;
   const probe = VERSION_PROBES[svc];
@@ -289,7 +113,6 @@ async function allStatus() {
       result[mode][name] = await probeVersion(name, info);
     }
   }
-  result.srt = await srtStatus();
   return result;
 }
 
@@ -306,6 +129,18 @@ function runCompose(mode, action) {
     return { ok: true, command: action, output: out, mode };
   } catch (e) {
     return { ok: false, command: action, error: e.stderr || e.message, mode };
+  }
+}
+
+function runSrtCompose(action) {
+  const file = join(SRT_GATEWAY_DIR, "docker-compose.yml");
+  const args = action === "down" ? "down" : "up -d";
+  const cmd = "docker compose -f \"" + file + "\" " + args;
+  try {
+    const out = sh(cmd, { timeout: 120000, cwd: SRT_GATEWAY_DIR });
+    return { ok: true, command: action, output: out };
+  } catch (e) {
+    return { ok: false, command: action, error: e.stderr || e.message };
   }
 }
 
@@ -463,31 +298,14 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  if (path === "/api/srt/config" && req.method === "GET") {
-    sendJson(res, 200, loadSrtConfig());
+  if (path === "/api/srt/up" && req.method === "POST") {
+    const result = runSrtCompose("up");
+    sendJson(res, result.ok ? 200 : 500, result);
     return;
   }
-  if (path === "/api/srt/config" && req.method === "POST") {
-    let body = "";
-    req.on("data", (c) => body += c);
-    req.on("end", () => {
-      try {
-        saveSrtConfig(JSON.parse(body));
-        sendJson(res, 200, { ok: true });
-      } catch (e) {
-        sendJson(res, 500, { ok: false, error: e.message });
-      }
-    });
-    return;
-  }
-  if (path === "/api/srt/start" && req.method === "POST") {
-    const r = await srtApply();
-    sendJson(res, r.created > 0 || r.removed >= 0 ? 200 : 500, r);
-    return;
-  }
-  if (path === "/api/srt/stop" && req.method === "POST") {
-    const removed = await deleteSrtFlows();
-    sendJson(res, 200, { ok: true, removed });
+  if (path === "/api/srt/down" && req.method === "POST") {
+    const result = runSrtCompose("down");
+    sendJson(res, result.ok ? 200 : 500, result);
     return;
   }
 
@@ -566,15 +384,6 @@ const PAGE = [
 ".card .status{display:flex;align-items:center;gap:6px;margin-top:8px;font-size:13px;font-weight:600}",
 ".card .status.running{color:var(--green)}.card .status.stopped{color:var(--red)}.card .status.unknown{color:var(--muted)}",
 ".actions{margin-top:14px;display:flex;gap:8px;flex-wrap:wrap}",
-".srt-lights{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}",
-".srt-light{display:inline-flex;align-items:center;gap:5px;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:2px 10px;font-size:12px;font-weight:600;color:var(--text);cursor:default}",
-".srt-light:before{content:'';width:9px;height:9px;border-radius:50%;background:var(--muted)}",
-".srt-light.green:before{background:var(--green);box-shadow:0 0 4px var(--green)}",
-".srt-light.red:before{background:var(--red);box-shadow:0 0 4px var(--red)}",
-".srt-light.off{color:var(--muted)}",
-".srt-light.off:before{background:var(--muted);opacity:.35}",
-".srt-meta{display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap;font-size:12px;color:var(--muted)}",
-".srt-ctr{display:inline-flex;align-items:center;gap:6px;margin-right:auto}",
 ".btn{padding:9px 18px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:13px;font-weight:600;cursor:pointer;transition:.15s;letter-spacing:.3px}",
 ".btn:hover{background:#1c2530;border-color:var(--accent)}",
 ".btn.show{border-color:var(--accent);color:var(--accent)}.btn.show:hover{background:#0d1a2a}",
@@ -747,118 +556,45 @@ const PAGE = [
 " catch(e){console.error(e)}",
 "}",
 "function closeModal(){document.getElementById('overlay').classList.remove('open');var m=document.getElementById('modal');m.classList.remove('wide')}",
-"var srtCfg=null;",
-"function renderSrt(srt){",
-" var active=0,running=0;",
-" for(var i=0;i<srt.channels.length;i++){",
-"  var ch=srt.channels[i];",
-"  if(ch.role!=='off')active++;",
-"  if(ch.running)running++;",
-" }",
+"function renderSrt(ctr){",
+" var gw=ctr.gateway||{};var ctl=ctr.control||{};",
+" var running=(gw.status==='running'&&ctl.status==='running');",
 " var h='<div class=\"mode-section\">';",
 " h+='<div class=\"mode-header\"><h2>SRT GATEWAY</h2>';",
-" h+='<span class=\"mode-badge '+(active>0?'active':'inactive')+'\">'+(active>0?running+'/'+active+' streams':'inactive')+'</span></div>';",
-" h+='<div class=\"srt-lights\">';",
-" for(var i=0;i<srt.channels.length;i++){",
-"  var ch=srt.channels[i];",
-"  var audio=ch.container==='efp'?'Opus 64k':'AAC 128k';",
-"  var tip=ch.sdi+(ch.role!=='off'?' &middot; '+ch.role+' &middot; '+(ch.container||'mpegts')+' &middot; '+audio+' &middot; '+(ch.address||'no addr'):' &middot; off');",
-"  h+='<span class=\"srt-light '+ch.color+'\" title=\"'+tip+'\">'+ch.sdi+'</span>';",
+" h+='<span class=\"mode-badge '+(running?'active':'inactive')+'\">'+(running?'running':'stopped')+'</span></div>';",
+" h+='<div class=\"cards\">';",
+" var names=['gateway','control'];",
+" for(var i=0;i<names.length;i++){",
+"  var n=names[i];var c=ctr[n]||{};var st=c.status||'not created';",
+"  var img=c.image||'-';var up=c.uptimeMs?fmtUptime(c.uptimeMs):'';",
+"  h+='<div class=\"card\"><div class=\"name\">'+n+'</div>';",
+"  h+='<div class=\"info\"><span>img: '+img+'</span><span>health: '+(c.health||'N/A')+'</span>'+(up?'<span>up: '+up+'</span>':'')+'</div>';",
+"  h+='<div class=\"row\"><span class=\"status '+cls(st)+'\">'+dot(st)+' '+st.toUpperCase()+'</span></div></div>';",
 " }",
 " h+='</div>';",
-" h+='<div class=\"srt-meta\">';",
-" var st=srt.stream||{};",
-" var container=st.container==='efp'?'EFP':'MPEG-TS';",
-" var audio=st.container==='efp'?'Opus 64k':'AAC 128k';",
-" h+='<span class=\"srt-ctr\">'+container+' &middot; '+(st.codec||'h264').toUpperCase()+' &middot; '+(st.bitrate||6)+' Mbps'+(st.video_mode&&st.video_mode!=='auto'?' &middot; '+st.video_mode:'')+' &middot; '+audio+' &mdash; '+(active>0?(running+'/'+active+' running'):'no streams configured')+'</span>';",
-" h+='<button class=\"btn show\" onclick=\"openSrtSettings()\">&#9881; Settings</button>';",
-" if(running>0){",
-"  h+='<button class=\"btn start\" onclick=\"srtStart()\">Restart</button>';",
-"  h+='<button class=\"btn stop\" onclick=\"srtStop()\">Stop</button>';",
-" }else{",
-"  h+='<button class=\"btn start\" onclick=\"srtStart()\">Start</button>';",
-" }",
+" h+='<div class=\"actions\">';",
+" h+='<button class=\"btn start\" onclick=\"srtUp()\">Start</button>';",
+" if(running)h+='<button class=\"btn stop\" onclick=\"srtDown()\">Stop</button>';",
+" if(ctl.status==='running')h+='<button class=\"btn studio-btn\" onclick=\"window.open(\\'http://\\'+window.location.hostname+\\':8090\\',\\'_blank\\')\">Open SRT Gateway</button>';",
 " h+='</div></div>';",
 " return h;",
 "}",
-"async function openSrtSettings(){",
+"async function srtUp(){",
+" toast('Starting SRT Gateway...',true);",
 " try{",
-"  var r=await fetch(API+'/srt/config');",
-"  srtCfg=await r.json();",
-" }catch(e){toast('Failed to load SRT config: '+e.message,false);return}",
-" if(!srtCfg.ports){toast('Invalid SRT config',false);return}",
-" var modal=document.getElementById('modal');",
-" var overlay=document.getElementById('overlay');",
-" var h='<div class=\"modal-header\"><h3>SRT GATEWAY SETTINGS</h3><button class=\"close-btn\" onclick=\"closeModal()\">x</button></div>';",
-" h+='<div style=\"padding:16px 20px\">';",
-" if(!srtCfg.stream)srtCfg.stream={codec:'h264',bitrate:6,video_mode:'auto',container:'mpegts'};",
-" h+='<h3 style=\"margin:0 0 6px\">Stream Settings (all channels)</h3>';",
-" h+='<table class=\"ps-table\"><thead><tr><th>Container</th><th>Codec</th><th>Bitrate (Mbps)</th><th>Video Mode</th></tr></thead><tbody><tr>';",
-" h+='<td><select id=\"st_container\"><option value=\"mpegts\"'+(srtCfg.stream.container!=='efp'?' selected':'')+'>mpegts</option><option value=\"efp\"'+(srtCfg.stream.container==='efp'?' selected':'')+'>efp</option></select></td>';",
-" h+='<td><select id=\"st_codec\"><option value=\"h264\"'+(srtCfg.stream.codec==='h264'?' selected':'')+'>h264</option><option value=\"h265\"'+(srtCfg.stream.codec==='h265'?' selected':'')+'>h265</option></select></td>';",
-" h+='<td><select id=\"st_bitrate\">';",
-" var brs=[4,6,12,24];",
-" for(var b=0;b<brs.length;b++){h+='<option value=\"'+brs[b]+'\"'+(Number(srtCfg.stream.bitrate)===brs[b]?' selected':'')+'>'+brs[b]+'</option>'}",
-" h+='</select></td>';",
-" h+='<td><input id=\"st_mode\" value=\"'+(srtCfg.stream.video_mode||'auto')+'\" placeholder=\"auto or e.g. 1080p50\" style=\"width:110px;background:var(--card);color:var(--text);border:1px solid var(--border);padding:4px\"></td>';",
-" h+='</tr></tbody></table>';",
-" h+='<p style=\"color:var(--muted);font-size:11px;margin:6px 0 0\">Audio: mpegts = AAC ~128 kbps, EFP = Opus 64 kbps (fixed by the container).</p>';",
-" h+='<h3 style=\"margin:16px 0 6px\">SDI Ports</h3>';",
-" h+='<p style=\"color:var(--muted);font-size:11px;margin:4px 0 6px\">Device number is automatic: SDI1=0, SDI2=1, ... SDI12=11.</p>';",
-" h+='<table class=\"ps-table\"><thead><tr><th>SDI Port</th><th>Role</th><th>SRT Address</th></tr></thead><tbody>';",
-" for(var i=0;i<srtCfg.ports.length;i++){",
-"  var p=srtCfg.ports[i];",
-"  h+='<tr><td><input id=\"sdi_'+i+'\" value=\"'+p.id+'\" style=\"width:80px;background:var(--card);color:var(--text);border:1px solid var(--border);padding:4px\"></td>';",
-"  h+='<td><select id=\"role_'+i+'\" style=\"background:var(--card);color:var(--text);border:1px solid var(--border);padding:4px\">';",
-"  var ro=['off','sender','receiver'];",
-"  for(var j=0;j<ro.length;j++){h+='<option value=\"'+ro[j]+'\"'+(p.role===ro[j]?' selected':'')+'>'+ro[j]+'</option>'}",
-"  h+='</select></td>';",
-"  h+='<td><input id=\"addr_'+i+'\" value=\"'+p.address+'\" placeholder=\"srt://host:port?streamid=...\" style=\"width:100%;background:var(--card);color:var(--text);border:1px solid var(--border);padding:4px\"></td>';",
-"  h+='</tr>';",
-" }",
-" h+='</tbody></table>';",
-" h+='<p style=\"color:var(--muted);font-size:11px;margin-top:10px\">SRT blocks are always callers. Addresses are stored only in the local gitignored config. Saving restarts the streams.</p>';",
-" h+='</div>';",
-" h+='<div class=\"modal-footer\"><button class=\"btn\" onclick=\"closeModal()\">Cancel</button><button class=\"btn start\" onclick=\"saveSrtSettings()\">Save</button></div>';",
-" modal.innerHTML=h;",
-" modal.classList.add('wide');",
-" overlay.classList.add('open');",
-"}",
-"async function saveSrtSettings(){",
-" srtCfg.stream.codec=document.getElementById('st_codec').value;",
-" srtCfg.stream.bitrate=Number(document.getElementById('st_bitrate').value);",
-" srtCfg.stream.video_mode=document.getElementById('st_mode').value;",
-" srtCfg.stream.container=document.getElementById('st_container').value;",
-" for(var i=0;i<srtCfg.ports.length;i++){",
-"  srtCfg.ports[i].id=document.getElementById('sdi_'+i).value;",
-"  srtCfg.ports[i].role=document.getElementById('role_'+i).value;",
-"  srtCfg.ports[i].address=document.getElementById('addr_'+i).value;",
-" }",
-" try{",
-"  var r=await fetch(API+'/srt/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(srtCfg)});",
+"  var r=await fetch(API+'/srt/up',{method:'POST'});",
 "  var d=await r.json();",
-"  if(d.ok){toast('SRT settings saved',true);closeModal();srtApplyRestart()}",
+"  if(d.ok){toast('SRT Gateway starting...',true);setTimeout(poll,3000)}",
 "  else{toast('Error: '+(d.error||'unknown'),false)}",
 " }catch(e){toast('Request failed: '+e.message,false)}",
 "}",
-"async function srtStart(){",
-" toast('Starting SRT streams on Strom...',true);",
+"async function srtDown(){",
+" if(!confirm('Stop the SRT Gateway (removes its containers)?'))return;",
+" toast('Stopping SRT Gateway...',true);",
 " try{",
-"  var r=await fetch(API+'/srt/start',{method:'POST'});",
+"  var r=await fetch(API+'/srt/down',{method:'POST'});",
 "  var d=await r.json();",
-"  if(d.ok||d.created>0){toast('Started '+d.created+' streams',true);setTimeout(poll,3000)}",
-"  else{toast('Error: '+(d.error||(d.failed>0?d.failed+' failed':'unknown')),false)}",
-" }catch(e){toast('Request failed: '+e.message,false)}",
-"}",
-"async function srtApplyRestart(){",
-" try{var r=await fetch(API+'/srt/start',{method:'POST'});var d=await r.json();toast('Restarted '+d.created+' streams',true);setTimeout(poll,3000)}catch(e){toast('Request failed: '+e.message,false)}",
-"}",
-"async function srtStop(){",
-" toast('Stopping SRT streams...',true);",
-" try{",
-"  var r=await fetch(API+'/srt/stop',{method:'POST'});",
-"  var d=await r.json();",
-"  if(d.ok){toast('Stopped '+d.removed+' streams',true);setTimeout(poll,2000)}",
+"  if(d.ok){toast('SRT Gateway stopped.',true);setTimeout(poll,2000)}",
 "  else{toast('Error: '+(d.error||'unknown'),false)}",
 " }catch(e){toast('Request failed: '+e.message,false)}",
 "}",
