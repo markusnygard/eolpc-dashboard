@@ -15,3 +15,12 @@ studio/
 
 # Local AI-tool session files (tokens, pids, logs): never commit
 .superpowers/brainstorm/
+
+# Internal notes, AI session logs and plans (CONTRIBUTING sections 6 and 9): kept locally, never committed
+CLAUDE.md
+MEMORY.md
+COPY.md
+commits.md
+docs/superpowers/
+__pycache__/
+*.pyc

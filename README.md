@@ -10,11 +10,10 @@ Dashboard, deployment configs, and project memory for the [Open Live](https://gi
 ## What It Does
 
 - **Dashboard** — web UI that monitors Docker containers, shows live status, real version numbers, and lets you start/stop/restart services with a single click
-- **Deployment configs** — ready-to-run `docker-compose.yml` for three modes:
+- **Deployment configs** — `deploy/<mode>/` holds the `docker-compose.yml` and `.env.example` for each mode; copy them to `../eolpc/<mode>/` and fill in `.env`:
   - **Local** — everything runs on your machine (Strom, Open-Live, Open-Live-Studio, CouchDB)
   - **Hybrid** — Strom runs locally, Open-Live and Studio run on OSC (cloud)
   - **SRT Gateway** — Linux + Blackmagic DeckLink only: captures SDI and sends MPEG-TS/EFP over SRT to a Haivision relay; driven from the dashboard's SRT GATEWAY section
-- **Memory agent** — `MEMORY.md` tracks architecture decisions, reference sources, and progress
 
 ## Architecture
 
@@ -85,16 +84,22 @@ git clone https://github.com/Eyevinn/open-live-studio.git frontend
 cd open-live-workspace
 ```
 
-Your folder structure should be:
+Your folder structure should be (the dashboard finds the others next to itself;
+override with `EOLPC_DIR`, `SRT_GATEWAY_DIR` and `MODULAR_DIR`):
 ```
-├── backend/          # open-live source
-├── frontend/         # open-live-studio source
-└── open-live-workspace/
-    ├── dashboard/
-    ├── open_live_local/
-    ├── open_live_hybrid/
-    └── MEMORY.md
+├── eolpc/                  # what runs
+│   ├── open-live/          # Eyevinn open-live, checked out at a release tag
+│   ├── open-live-studio/   # Eyevinn open-live-studio, same release
+│   ├── local/              # docker-compose.yml + .env, local mode
+│   ├── hybrid/             # docker-compose.yml + .env, hybrid mode
+│   └── strom/              # docker-compose.yml + .env, Strom only
+├── eolpc-dashboard/        # this repository
+├── eolpc-srt-gateway/      # optional, SDI to SRT
+└── eolpc-modular-studio/   # optional
 ```
+
+The compose files in `eolpc/<mode>/` keep their Docker project names
+(`name: open_live_local` and so on), so existing volumes stay in use.
 
 ### 2. Start the Stack
 
@@ -102,7 +107,7 @@ Your folder structure should be:
 
 ```bash
 # macOS / Windows (Docker Desktop)
-cd open_live_local
+cd ../eolpc/local
 docker compose up -d
 
 # Linux — set your LAN IP for Studio access from other machines
@@ -115,7 +120,7 @@ IP=192.168.1.100 docker compose --profile gpu up -d
 #### Option B — Hybrid Mode (Strom local, rest on OSC)
 
 ```bash
-cd open_live_hybrid
+cd ../eolpc/hybrid
 STROM_API_KEY=your-generated-api-key docker compose up -d
 ```
 
@@ -123,12 +128,12 @@ Then configure Open-Live and Studio on [OSC](https://www.osaas.io) pointing to y
 
 #### Option C — SRT Gateway (Linux + DeckLink only)
 
-The gateway lives in its own repo. Clone it as a sibling of this workspace:
+The gateway lives in its own repo. Clone it next to this one:
 
 ```bash
 cd ..
-git clone https://github.com/markusnygard/open-live-srt-gateway.git
-cd open-live-srt-gateway
+git clone https://github.com/markusnygard/eolpc-srt-gateway.git
+cd eolpc-srt-gateway
 cp .env.example .env
 mkdir -p data
 docker compose up -d
@@ -181,18 +186,11 @@ dashboard/
 ├── icon.svg                # Desktop icon
 └── package.json
 
-open_live_local/
-├── docker-compose.yml      # 4-service local stack
-└── .env.example            # Configuration template
+scripts/                    # image build, SRT health check and recorder helpers
 
-open_live_hybrid/
-├── docker-compose.yml      # 2-service hybrid stack
-└── .env.example            # Configuration template
-
-# SRT Gateway now lives in its own repo:
-# https://github.com/markusnygard/open-live-srt-gateway
-
-MEMORY.md                   # Project memory agent
+# Compose files per mode live in ../eolpc/<mode>/ (not in this repository).
+# SRT Gateway lives in its own repo:
+# https://github.com/markusnygard/eolpc-srt-gateway
 ```
 
 ## Troubleshooting
