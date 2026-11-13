@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: 2026 Contributors to the EBU Open Live Production Cloud project
+# SPDX-License-Identifier: Apache-2.0
+
+name: open_live_strom
+services:
+  strom:
+    image: ${STROM_UI_IMAGE:-eyevinntechnology/strom-full:0.8.1}
+    container_name: open-live-strom-ui
+    restart: "no"
+    environment:
+      - TZ=${TZ:-Europe/Stockholm}
+      - STROM_API_KEY=${STROM_API_KEY:-dev-key-local}
+      - STROM_ADMIN_USER=${STROM_ADMIN_USER:-admin}
+      - STROM_ADMIN_PASSWORD_HASH=${STROM_ADMIN_PASSWORD_HASH}
+    ports:
+      - "0.0.0.0:8082:8080"
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"

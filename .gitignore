@@ -3,15 +3,15 @@
 
 node_modules/
 .env
-db-data/
+/db-data/
 .pnpm-store/
 
 # Sub-repos (managed separately)
-backend/
-frontend/
-strom/
-open-live-studio/
-studio/
+/backend/
+/frontend/
+/strom/
+/open-live-studio/
+/studio/
 
 # Local AI-tool session files (tokens, pids, logs): never commit
 .superpowers/brainstorm/
