@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2026 Contributors to the EBU Open Live Production Cloud project
+SPDX-License-Identifier: CC-BY-4.0
+-->
+
 # Modular Studio — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development

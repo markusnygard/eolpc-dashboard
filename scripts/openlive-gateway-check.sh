@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Contributors to the EBU Open Live Production Cloud project
+# SPDX-License-Identifier: Apache-2.0
+
 # Open Live gateway watchdog — self-heals the VPS -> tailnet -> Strom/CouchDB chain.
 # Install on the VPS (the Headscale gateway). Run from a systemd timer.
 # Checks: services up, tailscale node up, tailnet reachability, NAT rules, ip_forward.

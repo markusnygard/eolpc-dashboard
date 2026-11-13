@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2026 Contributors to the EBU Open Live Production Cloud project
+SPDX-License-Identifier: CC-BY-4.0
+-->
+
 # Other Software — Media Player Architecture Reference
 
 > Source material from other software's media player, sufficient to rebuild

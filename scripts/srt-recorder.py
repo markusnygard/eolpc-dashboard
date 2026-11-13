@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Contributors to the EBU Open Live Production Cloud project
+# SPDX-License-Identifier: Apache-2.0
+
 """SRT Player + Recorder — displays an SRT stream and records to MP4 on keypress.
 
 Usage: srt-recorder.py srt://host:port?mode=caller

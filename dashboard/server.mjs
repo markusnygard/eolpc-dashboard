@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Contributors to the EBU Open Live Production Cloud project
+// SPDX-License-Identifier: Apache-2.0
+
 import { createServer, get as httpGet } from "node:http";
 import { readFileSync } from "node:fs";
 import { execSync } from "node:child_process";

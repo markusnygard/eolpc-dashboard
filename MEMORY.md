@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2026 Contributors to the EBU Open Live Production Cloud project
+SPDX-License-Identifier: CC-BY-4.0
+-->
+
 # Open Live — Project Memory
 
 > Auto-updated context file tracking all decisions, references, and architecture.

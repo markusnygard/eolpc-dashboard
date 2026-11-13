@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Contributors to the EBU Open Live Production Cloud project
+# SPDX-License-Identifier: Apache-2.0
+
 """Check SRT output client connections and report health to backend API."""
 import json, subprocess, urllib.request, sys
 

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Contributors to the EBU Open Live Production Cloud project
+# SPDX-License-Identifier: Apache-2.0
+
 # Build the versioned Open Live images used by the docker compose stacks.
 #
 # Bump the three version variables (or override via env) when new releases land:

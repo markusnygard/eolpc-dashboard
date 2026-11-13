@@ -1,4 +1,9 @@
-# Open Live Workspace
+<!--
+SPDX-FileCopyrightText: 2026 Contributors to the EBU Open Live Production Cloud project
+SPDX-License-Identifier: CC-BY-4.0
+-->
+
+# EOLPC Dashboard
 
 Dashboard, deployment configs, and project memory for the [Open Live](https://github.com/Eyevinn/open-live) broadcast production platform.
 
@@ -206,4 +211,8 @@ MEMORY.md                   # Project memory agent
 
 ## License
 
-MIT — see [Eyevinn/open-live](https://github.com/Eyevinn/open-live) and [Eyevinn/strom](https://github.com/Eyevinn/strom) for upstream licenses.
+Apache-2.0 (see `LICENSE`); documentation CC-BY-4.0. The components the dashboard starts keep
+their own licences; they are listed in `THIRD-PARTY.md`.
+
+Contributions follow the EOLPC contributing rules: SPDX header in every source file and
+`git commit --signoff` on every commit.

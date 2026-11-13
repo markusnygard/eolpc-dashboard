@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2026 Contributors to the EBU Open Live Production Cloud project
+SPDX-License-Identifier: CC-BY-4.0
+-->
+
 # Pending Commits & PRs
 
 > Date: 2026-07-07. Lists all changes across repos that need to be submitted.

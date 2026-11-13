@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Contributors to the EBU Open Live Production Cloud project
+# SPDX-License-Identifier: Apache-2.0
+
 DIR="$(cd "$(dirname "$0")" && pwd)"
 PORT="${PORT:-3100}"
 

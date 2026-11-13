@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2026 Contributors to the EBU Open Live Production Cloud project
+SPDX-License-Identifier: CC-BY-4.0
+-->
+
 # SRT Gateway Repo Split — Design
 
 **Date:** 2026-09-10

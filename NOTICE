@@ -1,0 +1,11 @@
+EOLPC Dashboard
+Copyright 2026 Contributors to the EBU Open Live Production Cloud project
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+Documentation is licensed under Creative Commons Attribution 4.0 International
+(see LICENSES/CC-BY-4.0.txt).
+
+No third-party code is copied into this repository. The dashboard has no npm
+dependencies. The software it starts and monitors (Eyevinn open-live,
+open-live-studio and Strom, CouchDB and others) is listed with its licence in
+THIRD-PARTY.md.
