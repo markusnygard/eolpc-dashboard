@@ -1,11 +1,15 @@
 import { createServer, get as httpGet } from "node:http";
+import { readFileSync } from "node:fs";
 import { execSync } from "node:child_process";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
-const SRT_GATEWAY_DIR = process.env.SRT_GATEWAY_DIR || join(ROOT, "..", "open-live-srt-gateway");
+// What runs (Open Live + Studio sources, compose files per mode) lives in ~/eolpc.
+const EOLPC_DIR = process.env.EOLPC_DIR || join(ROOT, "..", "eolpc");
+const SRT_GATEWAY_DIR = process.env.SRT_GATEWAY_DIR || join(ROOT, "..", "eolpc-srt-gateway");
+const MODULAR_DIR = process.env.MODULAR_DIR || join(ROOT, "..", "eolpc-modular-studio");
 const PORT = parseInt(process.env.PORT || "3100");
 
 const CONTAINERS = {
@@ -24,17 +28,21 @@ const CONTAINERS = {
     gateway: "open-live-srt-gateway",
     control: "open-live-srt-control",
   },
+  strom: {
+    "strom-ui": "open-live-strom-ui",
+  },
 };
 
 const VERSION_PROBES = {
   strom:     { port: 8080, path: "/api/version", field: "version" },
+  "strom-ui": { port: 8082, path: "/api/version", field: "version" },
   couchdb:   { port: 5984, path: "/", field: "version" },
 };
 
 const GIT_REPOS = {
-  "open-live": "backend",
-  studio:       "frontend",
-  modular:      "../open-live-modular-studio",
+  "open-live": join(EOLPC_DIR, "open-live"),
+  studio:       join(EOLPC_DIR, "open-live-studio"),
+  modular:      MODULAR_DIR,
 };
 
 function sh(cmd, opts) {
@@ -56,7 +64,7 @@ function dockerPs(name) {
 
 function gitVersion(relPath) {
   try {
-    const out = sh("git tag --sort=-v:refname", { cwd: join(ROOT, relPath), timeout: 3000 });
+    const out = sh("git tag --sort=-v:refname", { cwd: resolve(ROOT, relPath), timeout: 3000 });
     if (!out) return null;
     return out.split("\n")[0];
   } catch {
@@ -116,8 +124,31 @@ async function allStatus() {
   return result;
 }
 
+function readLocalEnv(key, fallback) {
+  try {
+    const txt = readFileSync(join(EOLPC_DIR, "local", ".env"), "utf8");
+    const m = txt.match(new RegExp("^" + key + "=(.+)$", "m"));
+    return m ? m[1].trim() : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+// Rebuild the open-live / open-live-studio images from the current source so a
+// local Start always runs the latest code. Docker layer caching keeps this cheap
+// when nothing changed (only the final build layer re-runs on a source change).
+function buildLocalAppImages() {
+  const builds = [
+    [readLocalEnv("OPEN_LIVE_IMAGE", "open-live:0.5.0"), join(EOLPC_DIR, "open-live")],
+    [readLocalEnv("OPEN_LIVE_STUDIO_IMAGE", "open-live-studio:0.5.0"), join(EOLPC_DIR, "open-live-studio")],
+  ];
+  for (const [tag, dir] of builds) {
+    sh('docker build -t "' + tag + '" "' + dir + '"', { timeout: 900000 });
+  }
+}
+
 function runCompose(mode, action) {
-  const dir = join(ROOT, "open_live_" + mode);
+  const dir = join(EOLPC_DIR, mode);
   const file = join(dir, "docker-compose.yml");
   let args;
   if (action === "down") args = "down";
@@ -166,7 +197,7 @@ const server = createServer(async (req, res) => {
 
   if (path.startsWith("/api/ps/") && req.method === "GET") {
     const mode = path.split("/")[3];
-    if (!["local", "hybrid"].includes(mode)) {
+    if (!["local", "hybrid", "strom"].includes(mode)) {
       sendJson(res, 400, { ok: false, error: "Invalid mode: " + mode });
       return;
     }
@@ -184,7 +215,7 @@ const server = createServer(async (req, res) => {
 
   if (path.startsWith("/api/stop/") && req.method === "POST") {
     const mode = path.split("/")[3];
-    if (!["local", "hybrid"].includes(mode)) {
+    if (!["local", "hybrid", "strom"].includes(mode)) {
       sendJson(res, 400, { ok: false, error: "Invalid mode: " + mode });
       return;
     }
@@ -195,9 +226,17 @@ const server = createServer(async (req, res) => {
 
   if (path.startsWith("/api/start/") && req.method === "POST") {
     const mode = path.split("/")[3];
-    if (!["local", "hybrid"].includes(mode)) {
+    if (!["local", "hybrid", "strom"].includes(mode)) {
       sendJson(res, 400, { ok: false, error: "Invalid mode: " + mode });
       return;
+    }
+    if (mode === "local") {
+      try {
+        buildLocalAppImages();
+      } catch (e) {
+        sendJson(res, 500, { ok: false, error: "Image build failed: " + (e.stderr || e.message || e) });
+        return;
+      }
     }
     const result = runCompose(mode, "up");
     // Force-start any containers stuck in "Created" state
@@ -280,7 +319,7 @@ const server = createServer(async (req, res) => {
     const parts = path.split("/");
     const mode = parts[3];
     const name = parts[4];
-    if (!["local", "hybrid"].includes(mode)) {
+    if (!["local", "hybrid", "strom"].includes(mode)) {
       sendJson(res, 400, { ok: false, error: "Invalid mode: " + mode });
       return;
     }
@@ -311,7 +350,7 @@ const server = createServer(async (req, res) => {
 
   if (path === "/api/modular/start" && req.method === "POST") {
     try {
-      const modularDir = join(ROOT, "..", "open-live-modular-studio");
+      const modularDir = MODULAR_DIR;
       // Stop and remove if already exists (could be stopped)
       try { sh("docker rm -f open-live-modular-studio", { timeout: 5000 }); } catch {}
       sh(
@@ -435,7 +474,7 @@ const PAGE = [
 "  var running=Object.values(ctr).filter(function(c){return c&&c.status==='running'}).length;",
 "  var active=running>0;",
 "  h+='<div class=\"mode-section\">';",
-"  h+='<div class=\"mode-header\"><h2>'+mode.toUpperCase()+' MODE</h2>';",
+"  h+='<div class=\"mode-header\"><h2>'+(mode==='strom'?'STROM (UI only)':mode.toUpperCase()+' MODE')+'</h2>';",
 "  h+='<span class=\"mode-badge '+(active?'active':'inactive')+'\">'+(active?running+'/'+total+' running':'inactive')+'</span></div>';",
 "  h+='<div class=\"cards\">';",
 "  for(var name in ctr){",
@@ -453,11 +492,12 @@ const PAGE = [
 "   h+='</div></div>'",
 "  }",
 "  h+='</div>';",
-"  if(mode==='local'||mode==='hybrid'){",
+"  if(mode==='local'||mode==='hybrid'||mode==='strom'){",
 "  h+='<div class=\"actions\">';",
 "  h+='<button class=\"btn start\" onclick=\"startMode(\\''+mode+'\\')\">Start</button>';",
 "  h+='<button class=\"btn show\" onclick=\"showContainers(\\''+mode+'\\')\">Show Containers</button>';",
 "  if(running>0)h+='<button class=\"btn stop\" onclick=\"stopMode(\\''+mode+'\\')\">Stop All</button>';",
+ "  if(mode==='strom'&&ctr['strom-ui']&&ctr['strom-ui'].status==='running')h+='<button class=\"btn studio-btn\" onclick=\"window.open(\\'http://'+window.location.hostname+':8082\\',\\'_blank\\')\">Open Strom UI</button>';",
 "  if(mode==='hybrid')h+='<button class=\"btn '+(autoStart?'autostart-on':'autostart-off')+'\" onclick=\"toggleAutoStart()\">'+(autoStart?'Hybrid autostart: ON':'Hybrid autostart: OFF')+'</button>';",
 "  if(mode==='local'&&ctr.studio&&ctr.studio.status==='running')h+='<button class=\"btn studio-btn\" onclick=\"window.open(\\'http://'+window.location.hostname+':3000\\',\\'_blank\\')\">Open Studio</button>';",
 "  if(mode==='local')h+='<button class=\"btn '+(ctr.modular&&ctr.modular.status==='running'?'stop':'start')+'\" onclick=\"toggleModular()\">'+(ctr.modular&&ctr.modular.status==='running'?'Stop modular':'Start modular')+'</button>';",
